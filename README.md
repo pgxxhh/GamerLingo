@@ -3,7 +3,7 @@
 Recreated from the provided product mocks, **GamerLingo** is a translation assistant tuned for gaming chatter, hype, and toxicity detection. The UI pairs a voice-enabled input stream with automatic language detection, slang-aware output, and sentiment tags so squads can stay on the same wavelength.
 
 <div align="center">
-  <img alt="GamerLingo hero" src="./docs/gamerlingo-hero.svg" width="100%" />
+  <img width="848" height="812" alt="image" src="https://github.com/user-attachments/assets/c5192ec9-8610-45b4-ace9-a6f6242aece4" />
 </div>
 
 ## Features
