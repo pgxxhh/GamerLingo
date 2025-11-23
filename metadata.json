@@ -1,0 +1,7 @@
+{
+  "name": "GamerLingo",
+  "description": "A slang-friendly translation assistant for gamers, converting text between English and Chinese with authentic gaming terminology.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
