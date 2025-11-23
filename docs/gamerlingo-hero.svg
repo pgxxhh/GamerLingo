@@ -1,0 +1,22 @@
+<svg width="1440" height="820" viewBox="0 0 1440 820" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1440" height="820" rx="24" fill="#0E1320"/>
+  <rect x="48" y="48" width="1344" height="120" rx="12" fill="#131C2F" stroke="#22365B" stroke-width="1.5"/>
+  <text x="96" y="115" fill="#7DE6B1" font-family="'Inter', 'Segoe UI', sans-serif" font-size="26" font-weight="700">GamerLingo</text>
+  <text x="96" y="148" fill="#7DA1E6" font-family="'Inter', 'Segoe UI', sans-serif" font-size="16" font-weight="600">Translation Assistant · Demo Version</text>
+  <text x="96" y="178" fill="#9FB5D9" font-family="'Inter', 'Segoe UI', sans-serif" font-size="14">Calibrated for toxicity, hype, and authentic gaming comms.</text>
+  <rect x="48" y="196" width="1344" height="520" rx="16" fill="#0E1626" stroke="#1E2E4A" stroke-width="1.2"/>
+  <rect x="96" y="248" width="1248" height="64" rx="10" fill="#152136" stroke="#253A5F" stroke-width="1.2"/>
+  <text x="124" y="288" fill="#8FB7FF" font-family="'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="600">INPUT_STREAM</text>
+  <text x="350" y="288" fill="#4CD3C2" font-family="'Inter', 'Segoe UI', sans-serif" font-size="13">AUTO DETECT</text>
+  <text x="560" y="288" fill="#8FB7FF" font-family="'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="600">-&gt; CHINESE (SLANG)</text>
+  <rect x="96" y="336" width="1248" height="112" rx="10" fill="#121B2D" stroke="#253A5F" stroke-width="1.1"/>
+  <text x="124" y="378" fill="#6F92BD" font-family="'Inter', 'Segoe UI', sans-serif" font-size="15">Type or speak...</text>
+  <rect x="96" y="480" width="1248" height="64" rx="10" fill="#152136" stroke="#253A5F" stroke-width="1.2"/>
+  <text x="124" y="518" fill="#8FB7FF" font-family="'Inter', 'Segoe UI', sans-serif" font-size="14" font-weight="600">RESULT - EN</text>
+  <rect x="96" y="560" width="1248" height="128" rx="10" fill="#121B2D" stroke="#253A5F" stroke-width="1.1"/>
+  <text x="124" y="608" fill="#E9EDFF" font-family="'Inter', 'Segoe UI', sans-serif" font-size="18" font-weight="700">"You're legit dogwater, just uninstall already."</text>
+  <text x="124" y="640" fill="#F07D7D" font-family="'Inter', 'Segoe UI', sans-serif" font-size="13" font-weight="600">#TOXIC</text>
+  <text x="196" y="640" fill="#D6B86D" font-family="'Inter', 'Segoe UI', sans-serif" font-size="13" font-weight="600">#FRUSTRATION</text>
+  <text x="310" y="640" fill="#7DE6B1" font-family="'Inter', 'Segoe UI', sans-serif" font-size="13" font-weight="600">#INSULT</text>
+  <text x="104" y="740" fill="#4F6B9A" font-family="'Inter', 'Segoe UI', sans-serif" font-size="13">Re-created illustration of the GamerLingo translation console.</text>
+</svg>
