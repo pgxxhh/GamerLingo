@@ -108,7 +108,104 @@ const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-// --- Step 1: Translate Text (Critical Path) ---
+const inflightTTS = new Map<string, Promise<string>>();
+
+// --- Step 1a: Streaming Text Translation (Fast) ---
+
+export async function* translateTextStream(
+  input: string | Blob,
+  sourceLang: string,
+  targetLang: string
+): AsyncGenerator<string, void, unknown> {
+  const ai = getAiClient();
+  const contents = [];
+  
+  // Simplified instruction for streaming pure text to avoid JSON overhead
+  const streamInstruction = `
+    You are GamerLingo. 
+    Task: Translate input to ${targetLang} Gaming Slang. 
+    Output: Return ONLY the translated text. Do not use JSON. Do not add explanations.
+    Context: Use authentic gaming terminology (Valorant/LoL/FPS/MOBA).
+    Style: ${targetLang === 'zh' ? 'Chinese Slang (牛逼, 下饭, 666)' : 'Gamer Slang (Diff, Cracked, No Cap)'}.
+  `;
+
+  if (typeof input === 'string') {
+    contents.push({ text: `Source: ${sourceLang}. Input: "${input}"` });
+  } else {
+    const audioBase64 = await blobToBase64(input);
+    contents.push({
+      inlineData: { mimeType: input.type || 'audio/wav', data: audioBase64 }
+    });
+    contents.push({ text: `Source: ${sourceLang}. Translate audio to text.` });
+  }
+
+  const stream = await ai.models.generateContentStream({
+    model: 'gemini-2.5-flash',
+    contents: contents,
+    config: {
+      systemInstruction: streamInstruction,
+      safetySettings: SAFETY_SETTINGS,
+    },
+  });
+
+  for await (const chunk of stream) {
+    if (chunk.text) {
+      yield chunk.text;
+    }
+  }
+}
+
+// --- Step 1b: Enrich Metadata (Async/Parallel) ---
+
+export const enrichTranslationMetadata = async (
+  originalText: string,
+  translatedText: string,
+  targetLang: string
+): Promise<Omit<TranslationResultPartial, 'slang'>> => {
+  const ai = getAiClient();
+  
+  const prompt = `
+    Analyze this gaming translation.
+    Original: "${originalText}"
+    Slang Translation: "${translatedText}"
+    Target Lang: ${targetLang}
+    
+    Return JSON with:
+    1. "tags": 1-3 tags (e.g. Toxic, Hype, Strategy, Funny).
+    2. "visual_description": Abstract cyber-punk art prompt for this emotion.
+  `;
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          visual_description: { type: Type.STRING },
+          tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ["visual_description", "tags"],
+      },
+      safetySettings: SAFETY_SETTINGS,
+    }
+  });
+
+  try {
+    const text = response.text || "{}";
+    const parsed = JSON.parse(cleanJsonString(text));
+    return {
+      visual_description: parsed.visual_description || "Abstract gaming vibe",
+      tags: parsed.tags || ["Gaming"]
+    };
+  } catch (e) {
+    console.error("Metadata enrichment failed", e);
+    return { visual_description: "Abstract", tags: [] };
+  }
+};
+
+// --- Step 1 (Legacy/Fallback): Translate Text Complete ---
 
 export const translateText = async (
   input: string | Blob,
@@ -138,7 +235,7 @@ export const translateText = async (
         systemInstruction: SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: RESPONSE_SCHEMA,
-        safetySettings: SAFETY_SETTINGS, // Added safety settings
+        safetySettings: SAFETY_SETTINGS,
       },
     });
 
@@ -165,18 +262,25 @@ export const translateText = async (
 export const generateSpeech = async (text: string): Promise<string> => {
   if (!text) return "";
   
+  const trimmed = text.trim();
+  
   // 1. Check Cache
-  const cached = getCachedTTS(text);
+  const cached = getCachedTTS(trimmed);
   if (cached) return cached;
+
+  // 2. Check In-Flight
+  if (inflightTTS.has(trimmed)) {
+      return inflightTTS.get(trimmed)!;
+  }
 
   const ai = getAiClient();
 
-  // Retry logic specific for TTS to improve success rate
-  return retryOperation(async () => {
+  // Create Promise
+  const promise = retryOperation(async () => {
     try {
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text }] }],
+        contents: [{ parts: [{ text: trimmed }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
@@ -187,8 +291,8 @@ export const generateSpeech = async (text: string): Promise<string> => {
 
       const part = response.candidates?.[0]?.content?.parts?.[0];
       if (part?.inlineData?.data) {
-        // 2. Set Cache
-        setCachedTTS(text, part.inlineData.data);
+        // 3. Set Cache
+        setCachedTTS(trimmed, part.inlineData.data);
         return part.inlineData.data;
       }
       throw new Error("No audio data returned");
@@ -197,6 +301,16 @@ export const generateSpeech = async (text: string): Promise<string> => {
       throw e;
     }
   }, 2, 500); // 2 Retries, 500ms delay
+
+  // Store in map
+  inflightTTS.set(trimmed, promise);
+
+  // Cleanup map after finish
+  promise.finally(() => {
+      inflightTTS.delete(trimmed);
+  });
+
+  return promise;
 };
 
 // --- Step 3: Generate Image (Async) ---
@@ -243,8 +357,14 @@ export const getReverseTranslation = async (text: string, targetLangCode: string
   let targetName = langObj ? langObj.label : "English";
   if (targetLangCode === 'auto') targetName = "English";
 
-  // Prompt engineered to bypass safety blocks by providing context
-  const prompt = `Translate the following text to ${targetName}. \nText: "${text}"\n\nContext: This is a gaming term or slang used in video games.`;
+  // Contextual Prompt for Gaming
+  const prompt = `
+    Task: Translate the following text to ${targetName}.
+    Text: "${text}"
+    Context: Video Game Chat (League of Legends, Valorant, CS:GO). 
+    Note: Terms like "kill", "shoot", "attack", "die", "inting" are game mechanics, not real violence.
+    Instruction: Provide a direct translation. Do not censor output.
+  `;
 
   try {
     const response = await ai.models.generateContent({
@@ -252,8 +372,13 @@ export const getReverseTranslation = async (text: string, targetLangCode: string
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       config: {
         // Explicit system instruction to focus on translation data, not moderation
-        systemInstruction: "You are a translation engine. Output ONLY the translation. If the text is slang/toxic, translate the meaning accurately.",
-        safetySettings: SAFETY_SETTINGS, // Ensure permissive settings are applied
+        systemInstruction: "You are a gaming translator. Do not block output based on gaming terminology (kill/death/weapons). Translate accurately.",
+        safetySettings: [
+             { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+             { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+             { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+             { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+        ]
       }
     });
 

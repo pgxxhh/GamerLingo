@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowRight, Mic, Square, ArrowRightLeft, Globe, Terminal } from 'lucide-react';
+import { ArrowRight, Mic, Square, ArrowRightLeft, Globe, Terminal, Loader2 } from 'lucide-react';
 import { LanguageCode, LoadingState } from '../types';
 import { LANGUAGES } from '../constants';
 
@@ -14,10 +14,12 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
   const [sourceLang, setSourceLang] = useState<LanguageCode>('auto');
   const [targetLang, setTargetLang] = useState<LanguageCode>('zh');
   const [isRecording, setIsRecording] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -25,6 +27,39 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
       textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
     }
   }, [inputText]);
+
+  // --- Auto-Translation Debounce Logic ---
+  useEffect(() => {
+    // Don't auto-translate if empty or currently recording
+    if (!inputText.trim() || isRecording) {
+        setIsTyping(false);
+        return;
+    }
+
+    setIsTyping(true);
+
+    // Clear existing timer
+    if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+    }
+
+    // Smart Delay Logic:
+    // 1. If user types a punctuation mark (comma, period, etc.), trigger almost immediately (100ms).
+    // 2. Otherwise, wait for a natural pause (500ms).
+    const lastChar = inputText.slice(-1);
+    const isPunctuation = /[，。；！？,.;!?\n]/.test(lastChar);
+    const delay = isPunctuation ? 100 : 500;
+
+    // Set new timer
+    debounceTimerRef.current = setTimeout(() => {
+        setIsTyping(false);
+        onTranslate(inputText, sourceLang, targetLang);
+    }, delay);
+
+    return () => {
+        if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [inputText, sourceLang, targetLang]); // Re-run if text or language changes
 
   const handleSwap = () => {
     setSourceLang(targetLang);
@@ -36,6 +71,10 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
       alert("Microphone not supported.");
       return;
     }
+    // Clear any pending auto-translation when mic starts
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    setIsTyping(false);
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -50,7 +89,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
         const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
         stream.getTracks().forEach(track => track.stop());
         
-        if (blob.size > 500) { // Avoid tiny empty clicks
+        if (blob.size > 500) { 
            onTranslate(blob, sourceLang, targetLang);
         }
         setIsRecording(false);
@@ -71,10 +110,14 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
   };
 
   const handleTextSubmit = () => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    setIsTyping(false);
     if (inputText.trim()) onTranslate(inputText, sourceLang, targetLang);
   };
 
   const isLoading = loadingStatus !== 'idle' && loadingStatus !== 'success' && loadingStatus !== 'error';
+  // We only disable interaction during MIC recording, not during text translation (to allow continuous typing)
+  const isInputDisabled = isRecording; 
 
   return (
     <div className="relative group">
@@ -87,6 +130,16 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
              <Terminal size={12}/> 
              <span className="hidden sm:inline">INPUT_STREAM</span>
              <span className="sm:hidden">INPUT</span>
+             
+             {/* Visual Indicator for Auto-Translation Status */}
+             {(isTyping || isLoading) && !isRecording && (
+                <div className="flex items-center gap-1.5 ml-2 text-cyber-primary animate-pulse">
+                    <Loader2 size={10} className="animate-spin"/>
+                    <span className="text-[10px] uppercase tracking-wider">
+                        {isTyping ? 'Syncing...' : 'Processing...'}
+                    </span>
+                </div>
+             )}
           </div>
           
           <div className="flex items-center gap-2">
@@ -128,7 +181,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
             placeholder="Type or speak..."
             className="w-full bg-transparent text-slate-100 placeholder-slate-600 focus:outline-none resize-none min-h-[60px] text-lg md:text-xl font-sans"
             rows={1}
-            disabled={isRecording || isLoading}
+            disabled={isInputDisabled}
           />
           
           <div className="flex flex-col justify-end gap-2 shrink-0 pb-1">
@@ -144,7 +197,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
                <button
                  type="button"
                  onClick={startRecording}
-                 disabled={isLoading}
+                 disabled={isLoading} // Mic is disabled while initial loading to prevent conflicts, but text isn't
                  className={`p-3 rounded-full border transition-all ${isLoading ? 'bg-slate-800 text-slate-600' : 'bg-slate-700 text-[#00ff9d] border-[#00ff9d] hover:bg-[#00ff9d] hover:text-black shadow-[0_0_10px_rgba(0,255,157,0.2)]'}`}
                >
                  <Mic size={20} />
@@ -157,18 +210,18 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
         <div className="mt-2 flex justify-end">
           <button
             onClick={handleTextSubmit}
-            disabled={isLoading || (!inputText.trim() && !isRecording)}
+            disabled={(!inputText.trim() && !isRecording)}
             className={`
               flex items-center gap-2 px-6 py-2 rounded font-bold uppercase tracking-wider text-sm transition-all duration-300
-              ${isLoading || (!inputText.trim() && !isRecording)
+              ${(!inputText.trim() && !isRecording)
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
                 : 'bg-cyber-primary text-cyber-darker hover:bg-cyber-accent hover:shadow-[0_0_15px_rgba(6,182,212,0.5)] active:scale-95'
               }
             `}
           >
             {loadingStatus === 'recording' ? 'Listening...' : 
-             loadingStatus === 'translating_text' ? 'Decoding...' : 
-             loadingStatus === 'loading_assets' ? 'Rendering...' : (
+             loadingStatus === 'translating_text' ? 'Streaming...' : 
+             loadingStatus === 'loading_assets' ? 'Refining...' : (
               <>Translate <ArrowRight size={16} /></>
             )}
           </button>
