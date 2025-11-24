@@ -83,33 +83,34 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
         
         {/* Toolbar */}
         <div className="flex flex-wrap gap-4 justify-between items-center mb-4 border-b border-slate-800 pb-3">
-          <div className="flex items-center gap-2 text-xs font-mono text-slate-500">
+          <div className="flex items-center gap-2 text-xs font-mono text-slate-500 shrink-0">
              <Terminal size={12}/> 
-             <span>INPUT_STREAM</span>
+             <span className="hidden sm:inline">INPUT_STREAM</span>
+             <span className="sm:hidden">INPUT</span>
           </div>
           
           <div className="flex items-center gap-2">
-            <div className="flex items-center gap-2 bg-slate-900 rounded px-2 py-1 border border-slate-700">
-              <Globe size={12} className="text-slate-400"/>
+            <div className="flex items-center gap-2 bg-slate-900 rounded px-2 py-1 border border-slate-700 w-28 sm:w-auto">
+              <Globe size={12} className="text-slate-400 shrink-0"/>
               <select 
                 value={sourceLang}
                 onChange={(e) => setSourceLang(e.target.value as LanguageCode)}
-                className="bg-transparent text-xs text-slate-300 focus:outline-none uppercase font-mono cursor-pointer"
+                className="bg-transparent text-xs text-slate-300 focus:outline-none uppercase font-mono cursor-pointer w-full text-ellipsis"
               >
                 {LANGUAGES.map(l => <option key={`src-${l.code}`} value={l.code}>{l.label}</option>)}
               </select>
             </div>
             
-            <button onClick={handleSwap} className="p-1.5 rounded-full hover:bg-slate-800 text-slate-600 hover:text-cyber-primary transition-all">
+            <button onClick={handleSwap} className="p-1.5 rounded-full hover:bg-slate-800 text-slate-600 hover:text-cyber-primary transition-all shrink-0">
               <ArrowRightLeft size={14} />
             </button>
 
-            <div className="flex items-center gap-2 bg-slate-900 rounded px-2 py-1 border border-cyber-primary/30 shadow-[0_0_5px_rgba(0,255,157,0.1)]">
-              <Globe size={12} className="text-cyber-primary"/>
+            <div className="flex items-center gap-2 bg-slate-900 rounded px-2 py-1 border border-cyber-primary/30 shadow-[0_0_5px_rgba(0,255,157,0.1)] w-28 sm:w-auto">
+              <Globe size={12} className="text-cyber-primary shrink-0"/>
               <select 
                 value={targetLang}
                 onChange={(e) => setTargetLang(e.target.value as LanguageCode)}
-                className="bg-transparent text-xs text-cyber-primary font-bold focus:outline-none uppercase font-mono cursor-pointer"
+                className="bg-transparent text-xs text-cyber-primary font-bold focus:outline-none uppercase font-mono cursor-pointer w-full text-ellipsis"
               >
                 {LANGUAGES.filter(l => l.code !== 'auto').map(l => <option key={`tgt-${l.code}`} value={l.code}>{l.label}</option>)}
               </select>

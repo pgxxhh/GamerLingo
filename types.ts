@@ -8,6 +8,7 @@ export interface TranslationRecord {
   audioData?: string;
   tags: string[]; // e.g., ["Toxic", "Hype", "Neutral"]
   timestamp: number;
+  sourceLang: string; // Added for reverse translation context
   targetLang: string;
 }
 
@@ -15,6 +16,7 @@ export interface TranslationResultPartial {
   slang: string;
   visual_description: string;
   tags: string[];
+  audioData?: string; // Added for caching
 }
 
 export interface LoadingState {

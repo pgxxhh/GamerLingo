@@ -48,27 +48,44 @@ const TranslationBox: React.FC<TranslationBoxProps> = ({ onNewTranslation }) => 
         imagePrompt: textData.visual_description,
         tags: textData.tags,
         timestamp: Date.now(),
+        sourceLang: source, // Store source language
         targetLang: target,
         imageUrl: undefined, // Loading
-        audioData: undefined // Loading
+        audioData: cachedData?.audioData // Use cached audio if available!
       };
 
       setCurrentResult(newRecord);
+
+      // If we already have audio from cache, we are essentially done.
+      // Otherwise, we load assets.
+      if (newRecord.audioData) {
+        onNewTranslation(newRecord);
+        setLoadingState({ status: 'success' });
+        return;
+      }
+
       setLoadingState({ status: 'loading_assets' });
 
       // Step 2: Parallel Asset Generation (Async)
       // IMAGE GENERATION DISABLED TEMPORARILY FOR PERFORMANCE
-      // We don't block the UI here, we just update state when they arrive.
       const [audioBase64] = await Promise.all([
-        generateSpeech(textData.slang),
+        generateSpeech(textData.slang).catch(e => {
+            console.warn("Audio gen failed, UI will fallback", e);
+            return ""; 
+        }),
         // withTimeout(generateImage(textData.visual_description), 10000, "") 
       ]);
 
       const finalRecord = {
         ...newRecord,
-        audioData: audioBase64,
-        imageUrl: undefined // Disabled image
+        audioData: audioBase64 || undefined, // undefined triggers browser fallback
+        imageUrl: undefined
       };
+
+      // Update Cache with audio data for next time
+      if (cacheKey && audioBase64) {
+        setCachedTranslation(cacheKey, { ...textData, audioData: audioBase64 });
+      }
 
       setCurrentResult(finalRecord);
       onNewTranslation(finalRecord);

@@ -1,9 +1,10 @@
 
 import React, { useState, useRef, useEffect } from 'react';
 import { TranslationRecord } from '../types';
-import { Volume2, Copy, Check, Zap, ImageOff } from 'lucide-react';
+import { Volume2, Copy, Check, Zap, ImageOff, Loader2 } from 'lucide-react';
 import { decodeAudioData } from '../services/geminiService';
 import ShadowingPractice from './ShadowingPractice';
+import ReverseTranslationPopup from './ReverseTranslationPopup';
 
 interface ResultDisplayProps {
   result: TranslationRecord;
@@ -13,27 +14,98 @@ interface ResultDisplayProps {
 const ResultDisplay: React.FC<ResultDisplayProps> = ({ result, isAssetsLoading }) => {
   const [copied, setCopied] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  
+  // Popup State
+  const [selectionState, setSelectionState] = useState<{
+    text: string;
+    position: { x: number; y: number };
+  } | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     return () => { audioContextRef.current?.close(); };
   }, []);
 
+  // Selection Handler for Mouse, Touch, and Keyboard
+  const handleSelectionChange = () => {
+    // Add a small delay to ensure the OS/Browser has updated the selection state
+    // This is critical for mobile devices where 'touchend' might fire before selection is finalized.
+    setTimeout(() => {
+        const selection = window.getSelection();
+        
+        if (!selection || selection.isCollapsed || !containerRef.current) {
+            // Only clear selection if the new selection is empty (user clicked elsewhere/cleared it)
+            // If the user selects something outside, we might want to keep or clear depending on UX.
+            // Here we clear it if the selection is collapsed (empty).
+            if (!selection?.toString()) {
+                 setSelectionState(null); 
+            }
+            return;
+        }
+
+        const text = selection.toString().trim();
+        if (text.length < 1) {
+            setSelectionState(null);
+            return;
+        }
+
+        // Check if selection is inside our specific text container
+        if (!containerRef.current.contains(selection.anchorNode)) return;
+
+        const range = selection.getRangeAt(0);
+        const rect = range.getBoundingClientRect();
+
+        // Calculate position relative to the DOCUMENT (for Portal rendering)
+        // We use window.scrollX/Y to account for scrolling, as the Portal is absolute to body
+        setSelectionState({
+          text,
+          position: {
+            x: rect.left + window.scrollX + (rect.width / 2),
+            y: rect.top + window.scrollY
+          }
+        });
+    }, 50);
+  };
+
   const playAudio = async () => {
-    if (!result.audioData) return;
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+    // Strategy 1: Play Gemini Audio if available
+    if (result.audioData) {
+      try {
+        if (!audioContextRef.current) {
+          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+        }
+        const ctx = audioContextRef.current;
+        if (ctx.state === 'suspended') await ctx.resume();
+        
+        const buffer = await decodeAudioData(result.audioData, ctx);
+        const source = ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(ctx.destination);
+        source.start(0);
+      } catch (e) {
+        console.error("Gemini Playback error", e);
+        // Fallback to browser if decoding fails
+        playBrowserTTS();
       }
-      const ctx = audioContextRef.current;
-      if (ctx.state === 'suspended') await ctx.resume();
+    } else {
+      // Strategy 2: Fallback to Browser Speech Synthesis
+      playBrowserTTS();
+    }
+  };
+
+  const playBrowserTTS = () => {
+    if ('speechSynthesis' in window) {
+      const utterance = new SpeechSynthesisUtterance(result.translatedText);
+      // Try to find a voice matching the target lang (simple match)
+      const voices = window.speechSynthesis.getVoices();
+      const langCode = result.targetLang === 'zh' ? 'zh-CN' : result.targetLang;
+      const voice = voices.find(v => v.lang.startsWith(langCode));
+      if (voice) utterance.voice = voice;
       
-      const buffer = await decodeAudioData(result.audioData, ctx);
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.start(0);
-    } catch (e) {
-      console.error("Playback error", e);
+      utterance.rate = 1.1; // Slightly faster for gaming vibe
+      window.speechSynthesis.speak(utterance);
+    } else {
+      console.warn("No TTS available");
     }
   };
 
@@ -51,6 +123,9 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({ result, isAssetsLoading }
     return 'bg-cyber-secondary/20 text-cyber-secondary border-cyber-secondary/30';
   };
 
+  // The button is clickable if we have audio data OR if we aren't loading assets anymore (implies fallback is ready)
+  const isPlayable = !!result.audioData || !isAssetsLoading;
+
   return (
     <div className="relative animate-in fade-in slide-in-from-bottom-4 duration-500 mt-6">
       <div className="absolute top-0 left-0 w-2 h-2 border-t-2 border-l-2 border-cyber-secondary"></div>
@@ -61,30 +136,6 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({ result, isAssetsLoading }
       <div className="bg-cyber-surface/30 backdrop-blur-sm border border-cyber-secondary/30 rounded-lg p-0 overflow-hidden min-h-[120px]">
         <div className="flex flex-col md:flex-row">
           
-          {/* Visual Side - DISABLED for Performance
-          <div className="w-full md:w-1/3 min-h-[250px] bg-slate-900/50 relative border-b md:border-b-0 md:border-r border-slate-700/50 flex items-center justify-center overflow-hidden">
-             {result.imageUrl ? (
-               <img 
-                 src={result.imageUrl} 
-                 alt="Abstract Representation" 
-                 className="w-full h-full object-cover animate-in fade-in duration-1000 hover:scale-110 transition-transform duration-700"
-               />
-             ) : isAssetsLoading ? (
-               <div className="flex flex-col items-center gap-2">
-                 <div className="w-8 h-8 rounded-full border-2 border-t-transparent border-cyber-secondary animate-spin"></div>
-                 <div className="text-slate-600 font-mono text-xs text-center animate-pulse">
-                   RENDERING_VISUALS...
-                 </div>
-               </div>
-             ) : (
-                <div className="flex flex-col items-center gap-2 text-slate-700 opacity-50">
-                   <ImageOff size={32} />
-                   <span className="text-[10px] font-mono tracking-widest">VISUAL_SIGNAL_LOST</span>
-                </div>
-             )}
-          </div>
-          */}
-
           {/* Content Side */}
           <div className="w-full p-6 flex flex-col justify-between">
             <div>
@@ -95,29 +146,46 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({ result, isAssetsLoading }
                 
                 <div className="flex gap-2 z-20 relative">
                    {isAssetsLoading ? (
-                     <div className="p-2 rounded bg-slate-800 animate-pulse">
-                       <Volume2 size={20} className="text-slate-600"/>
+                     <div className="p-2 rounded bg-slate-800 border border-slate-700">
+                       <Loader2 size={20} className="text-cyber-primary animate-spin"/>
                      </div>
                    ) : (
                      <button 
                         onClick={playAudio}
-                        className={`p-2 rounded transition-colors ${result.audioData ? 'bg-cyber-primary/20 text-cyber-primary hover:bg-cyber-primary hover:text-black cursor-pointer shadow-lg' : 'bg-slate-800 text-slate-600'}`}
-                        disabled={!result.audioData}
+                        disabled={!isPlayable}
+                        className={`p-2 rounded transition-all duration-200 ${isPlayable ? 'bg-cyber-primary/20 text-cyber-primary hover:bg-cyber-primary hover:text-black cursor-pointer shadow-lg hover:shadow-[0_0_15px_rgba(0,255,157,0.4)]' : 'bg-slate-800 text-slate-600 cursor-not-allowed'}`}
                       >
                         <Volume2 size={20} />
                      </button>
                    )}
-                   <button onClick={handleCopy} className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white">
+                   <button onClick={handleCopy} className="p-2 rounded hover:bg-white/10 text-slate-400 hover:text-white transition-colors">
                      {copied ? <Check size={20} className="text-green-400"/> : <Copy size={20}/>}
                    </button>
                 </div>
               </div>
 
-              <div className="space-y-4 mb-6">
-                 <div className="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-200 to-slate-400 leading-tight break-words">
+              {/* TEXT CONTAINER with Selection Tracking */}
+              <div 
+                  className="space-y-4 mb-6 relative" 
+                  ref={containerRef} 
+                  onMouseUp={handleSelectionChange}
+                  onTouchEnd={handleSelectionChange}
+                  onKeyUp={handleSelectionChange}
+              >
+                 <div className="text-4xl md:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-white via-slate-200 to-slate-400 leading-tight break-words selection:bg-cyber-primary selection:text-black cursor-text">
                   {result.translatedText}
                 </div>
                 <div className="h-1 w-20 bg-cyber-secondary/50 rounded-full"></div>
+
+                {/* Inline Popup - NOW RENDERED VIA PORTAL IN COMPONENT */}
+                {selectionState && (
+                    <ReverseTranslationPopup 
+                        text={selectionState.text}
+                        targetLangCode={result.sourceLang || 'en'} // Fallback if sourceLang missing from old history
+                        position={selectionState.position}
+                        onClose={() => setSelectionState(null)}
+                    />
+                )}
               </div>
 
               <div className="flex flex-wrap gap-2 mb-6">

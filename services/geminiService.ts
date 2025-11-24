@@ -1,7 +1,8 @@
 
-import { GoogleGenAI, Modality, Type } from "@google/genai";
-import { SYSTEM_INSTRUCTION, RESPONSE_SCHEMA } from "../constants";
+import { GoogleGenAI, Modality, Type, HarmCategory, HarmBlockThreshold } from "@google/genai";
+import { SYSTEM_INSTRUCTION, RESPONSE_SCHEMA, LANGUAGES } from "../constants";
 import { SlangResponse, ShadowResult, TranslationResultPartial } from "../types";
+import { getCachedReverseTranslation, setCachedReverseTranslation, getCachedTTS, setCachedTTS } from "./cacheService";
 
 const getAiClient = () => {
   if (!process.env.API_KEY) {
@@ -75,10 +76,37 @@ export const decodeAudioData = async (base64Data: string, audioContext: AudioCon
   }
 };
 
+let globalAudioContext: AudioContext | null = null;
+
+export const playBase64Audio = async (base64: string) => {
+  try {
+    if (!globalAudioContext) {
+      globalAudioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+    }
+    const ctx = globalAudioContext;
+    if (ctx.state === 'suspended') await ctx.resume();
+    
+    const buffer = await decodeAudioData(base64, ctx);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start(0);
+  } catch (e) {
+    console.error("Failed to play audio", e);
+  }
+};
+
 const cleanJsonString = (str: string): string => {
   // Remove Markdown code blocks ```json ... ``` or ``` ... ```
   return str.replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '').trim();
 };
+
+const SAFETY_SETTINGS = [
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+];
 
 // --- Step 1: Translate Text (Critical Path) ---
 
@@ -110,6 +138,7 @@ export const translateText = async (
         systemInstruction: SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: RESPONSE_SCHEMA,
+        safetySettings: SAFETY_SETTINGS, // Added safety settings
       },
     });
 
@@ -135,26 +164,39 @@ export const translateText = async (
 
 export const generateSpeech = async (text: string): Promise<string> => {
   if (!text) return "";
+  
+  // 1. Check Cache
+  const cached = getCachedTTS(text);
+  if (cached) return cached;
+
   const ai = getAiClient();
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-preview-tts",
-      contents: [{ parts: [{ text }] }],
-      config: {
-        responseModalities: [Modality.AUDIO],
-        speechConfig: {
-          voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+  // Retry logic specific for TTS to improve success rate
+  return retryOperation(async () => {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } },
+          },
         },
-      },
-    });
+      });
 
-    const part = response.candidates?.[0]?.content?.parts?.[0];
-    return part?.inlineData?.data || "";
-  } catch (e) {
-    console.error("TTS Gen Failed:", e);
-    return "";
-  }
+      const part = response.candidates?.[0]?.content?.parts?.[0];
+      if (part?.inlineData?.data) {
+        // 2. Set Cache
+        setCachedTTS(text, part.inlineData.data);
+        return part.inlineData.data;
+      }
+      throw new Error("No audio data returned");
+    } catch (e) {
+      console.warn("TTS Attempt Failed:", e);
+      throw e;
+    }
+  }, 2, 500); // 2 Retries, 500ms delay
 };
 
 // --- Step 3: Generate Image (Async) ---
@@ -184,6 +226,69 @@ export const generateImage = async (prompt: string): Promise<string> => {
   } catch (e) {
     console.error("Image Gen Failed:", e);
     return "";
+  }
+};
+
+// --- Step 4: Reverse Translation (Selection) ---
+
+export const getReverseTranslation = async (text: string, targetLangCode: string): Promise<string> => {
+  // 1. Check Cache First
+  const cached = getCachedReverseTranslation(text, targetLangCode);
+  if (cached) return cached;
+
+  const ai = getAiClient();
+  
+  // Resolve code to label (e.g., 'zh' -> 'Chinese (Slang)') for better prompting
+  const langObj = LANGUAGES.find(l => l.code === targetLangCode);
+  let targetName = langObj ? langObj.label : "English";
+  if (targetLangCode === 'auto') targetName = "English";
+
+  // Prompt engineered to bypass safety blocks by providing context
+  const prompt = `Translate the following text to ${targetName}. \nText: "${text}"\n\nContext: This is a gaming term or slang used in video games.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        // Explicit system instruction to focus on translation data, not moderation
+        systemInstruction: "You are a translation engine. Output ONLY the translation. If the text is slang/toxic, translate the meaning accurately.",
+        safetySettings: SAFETY_SETTINGS, // Ensure permissive settings are applied
+      }
+    });
+
+    let result = "No translation found";
+
+    // 1. Try standard text access
+    try {
+        const textResponse = response.text;
+        if (textResponse) result = textResponse.trim();
+    } catch (e) {
+        // Ignore getter error, proceed to inspection
+    }
+
+    // 2. Deep inspection if first attempt failed
+    if (result === "No translation found") {
+        const candidate = response.candidates?.[0];
+        if (candidate) {
+            const partText = candidate.content?.parts?.[0]?.text;
+            if (partText) result = partText.trim();
+            else if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+                result = `[${candidate.finishReason}]`;
+            }
+        }
+    }
+
+    // 3. Set Cache
+    if (result !== "No translation found" && !result.startsWith("[")) {
+      setCachedReverseTranslation(text, targetLangCode, result);
+    }
+    
+    return result;
+
+  } catch (e) {
+    console.error("Reverse translation failed", e);
+    return "Error";
   }
 };
 
