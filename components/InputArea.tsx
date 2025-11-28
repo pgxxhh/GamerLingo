@@ -1,20 +1,25 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowRight, Mic, Square, ArrowRightLeft, Globe, Terminal, Loader2 } from 'lucide-react';
-import { LanguageCode, LoadingState } from '../types';
+import { Mic, Square, ArrowRightLeft, Globe, Terminal, Loader2 } from 'lucide-react';
+import { LanguageCode, LoadingState, TranslationRecord } from '../types';
 import { LANGUAGES } from '../constants';
 
 interface InputAreaProps {
   onTranslate: (text: string | Blob, source: LanguageCode, target: LanguageCode) => void;
   loadingStatus: LoadingState['status'];
+  currentResult?: TranslationRecord | null;
+  onSwapContent?: (newRecord: TranslationRecord) => void;
 }
 
-const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => {
+const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus, currentResult, onSwapContent }) => {
   const [inputText, setInputText] = useState('');
   const [sourceLang, setSourceLang] = useState<LanguageCode>('auto');
   const [targetLang, setTargetLang] = useState<LanguageCode>('zh');
   const [isRecording, setIsRecording] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  
+  // Flag to ignore auto-translation effect when manually swapping content
+  const isSwappingRef = useRef(false);
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -30,6 +35,13 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
 
   // --- Auto-Translation Debounce Logic ---
   useEffect(() => {
+    // If we just swapped content programmatically, ignore this update to prevent re-translation
+    if (isSwappingRef.current) {
+        isSwappingRef.current = false;
+        setIsTyping(false);
+        return;
+    }
+
     // Don't auto-translate if empty or currently recording
     if (!inputText.trim() || isRecording) {
         setIsTyping(false);
@@ -43,12 +55,12 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
         clearTimeout(debounceTimerRef.current);
     }
 
-    // Smart Delay Logic:
-    // 1. If user types a punctuation mark (comma, period, etc.), trigger almost immediately (100ms).
-    // 2. Otherwise, wait for a natural pause (500ms).
+    // Smart Delay Logic (Optimized for Quota):
+    // 1. Punctuation: 800ms (was 100ms). Enough time to verify sentence end without spamming.
+    // 2. Normal typing: 1500ms (was 500ms). Ensures user is truly paused before consuming quota.
     const lastChar = inputText.slice(-1);
     const isPunctuation = /[，。；！？,.;!?\n]/.test(lastChar);
-    const delay = isPunctuation ? 100 : 500;
+    const delay = isPunctuation ? 800 : 1500;
 
     // Set new timer
     debounceTimerRef.current = setTimeout(() => {
@@ -62,8 +74,35 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
   }, [inputText, sourceLang, targetLang]); // Re-run if text or language changes
 
   const handleSwap = () => {
-    setSourceLang(targetLang);
-    setTargetLang(sourceLang === 'auto' ? 'en' : sourceLang);
+    const newSource = targetLang;
+    const newTarget = sourceLang === 'auto' ? 'en' : sourceLang;
+
+    // Logic to swap content if a result exists
+    if (currentResult && onSwapContent) {
+        // 1. Set flag to prevent auto-translation
+        isSwappingRef.current = true;
+
+        // 2. Set Input Text to previous Result Text
+        setInputText(currentResult.translatedText);
+
+        // 3. Create inverted record for the result display
+        const invertedRecord: TranslationRecord = {
+            ...currentResult,
+            originalText: currentResult.translatedText,
+            translatedText: currentResult.originalText,
+            sourceLang: newSource,
+            targetLang: newTarget,
+            // Clear audio as it no longer matches the text
+            audioData: undefined, 
+            // Tags might not be 100% accurate for reverse but keeping them is better than empty
+            // or we could clear them. Keeping for now as per "keep content" request.
+        };
+        
+        onSwapContent(invertedRecord);
+    }
+
+    setSourceLang(newSource);
+    setTargetLang(newTarget);
   };
 
   const startRecording = async () => {
@@ -116,7 +155,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
   };
 
   const isLoading = loadingStatus !== 'idle' && loadingStatus !== 'success' && loadingStatus !== 'error';
-  // We only disable interaction during MIC recording, not during text translation (to allow continuous typing)
+  // We only disable interaction during MIC recording, not during text translation
   const isInputDisabled = isRecording; 
 
   return (
@@ -204,27 +243,6 @@ const InputArea: React.FC<InputAreaProps> = ({ onTranslate, loadingStatus }) => 
                </button>
              )}
           </div>
-        </div>
-
-        {/* Submit Button */}
-        <div className="mt-2 flex justify-end">
-          <button
-            onClick={handleTextSubmit}
-            disabled={(!inputText.trim() && !isRecording)}
-            className={`
-              flex items-center gap-2 px-6 py-2 rounded font-bold uppercase tracking-wider text-sm transition-all duration-300
-              ${(!inputText.trim() && !isRecording)
-                ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
-                : 'bg-cyber-primary text-cyber-darker hover:bg-cyber-accent hover:shadow-[0_0_15px_rgba(6,182,212,0.5)] active:scale-95'
-              }
-            `}
-          >
-            {loadingStatus === 'recording' ? 'Listening...' : 
-             loadingStatus === 'translating_text' ? 'Streaming...' : 
-             loadingStatus === 'loading_assets' ? 'Refining...' : (
-              <>Translate <ArrowRight size={16} /></>
-            )}
-          </button>
         </div>
       </div>
     </div>

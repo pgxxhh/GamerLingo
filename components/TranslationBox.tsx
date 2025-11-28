@@ -18,6 +18,12 @@ const TranslationBox: React.FC<TranslationBoxProps> = ({ onNewTranslation }) => 
   // Track the ID of the active request to prevent race conditions
   const activeRequestIdRef = useRef<number>(0);
 
+  const handleSwapContent = (newRecord: TranslationRecord) => {
+      setCurrentResult(newRecord);
+      // We also update the history with this "new" (swapped) record so it persists
+      onNewTranslation(newRecord);
+  };
+
   const handleTranslate = async (input: string | Blob, source: LanguageCode, target: LanguageCode) => {
     // 1. Generate new Request ID
     const requestId = Date.now();
@@ -204,7 +210,12 @@ const TranslationBox: React.FC<TranslationBoxProps> = ({ onNewTranslation }) => 
 
   return (
     <div className="w-full max-w-4xl mx-auto space-y-6">
-      <InputArea onTranslate={handleTranslate} loadingStatus={loadingState.status} />
+      <InputArea 
+        onTranslate={handleTranslate} 
+        loadingStatus={loadingState.status} 
+        currentResult={currentResult}
+        onSwapContent={handleSwapContent}
+      />
       
       {loadingState.status === 'error' && (
         <div className="p-4 bg-red-900/20 border border-red-500/50 rounded text-red-400 text-center flex items-center justify-center gap-2">

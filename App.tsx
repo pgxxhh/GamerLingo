@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import TranslationBox from './components/TranslationBox';
 import HistoryList from './components/HistoryList';
@@ -74,8 +75,7 @@ const App: React.FC = () => {
 
       {/* Footer */}
       <footer className="relative z-10 py-6 text-center text-slate-600 text-xs font-mono space-y-2">
-        <p>POWERED BY GEMINI 2.5 FLASH // <span className="text-slate-500">NO CAP</span></p>
-        <p className="text-cyber-primary/50">DEV: UncleLee</p>
+        <p>Contact: <span className="text-cyber-primary/50">975022570yp@gmail.com</span></p>
       </footer>
 
     </div>

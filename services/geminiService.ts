@@ -14,10 +14,23 @@ const getAiClient = () => {
 // --- Utilities ---
 
 // Retry wrapper for high availability/flaky connections
+// Updated to handle 429 Quota Exceeded more gracefully
 async function retryOperation<T>(operation: () => Promise<T>, retries = 2, delay = 1000): Promise<T> {
   try {
     return await operation();
-  } catch (error) {
+  } catch (error: any) {
+    const errorMsg = error.toString().toLowerCase();
+    
+    // Check for Quota Exceeded (429)
+    if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('resource exhausted')) {
+        console.warn("Quota exceeded, slowing down...");
+        if (retries <= 0) throw new Error("API Quota Exceeded. Please try again in a minute.");
+        
+        // Wait longer (backoff) if it's a quota error
+        await new Promise(resolve => setTimeout(resolve, delay * 3));
+        return retryOperation(operation, retries - 1, delay * 3);
+    }
+
     if (retries <= 0) throw error;
     await new Promise(resolve => setTimeout(resolve, delay));
     return retryOperation(operation, retries - 1, delay * 2);
@@ -120,13 +133,30 @@ export async function* translateTextStream(
   const ai = getAiClient();
   const contents = [];
   
+  const targetLabel = LANGUAGES.find(l => l.code === targetLang)?.label || targetLang;
+
+  // Provide language-specific examples to ensure the model outputs the correct script/language
+  let styleExamples = "Gamer Slang";
+  switch(targetLang) {
+      case 'zh': styleExamples = "Chinese Slang (牛逼, 下饭, 666)"; break;
+      case 'en': styleExamples = "English Slang (Diff, Cracked, No Cap)"; break;
+      case 'th': styleExamples = "Thai Slang (ตึง, ไก่, หัวร้อน, แบก)"; break;
+      case 'jp': styleExamples = "Japanese Slang (草, 乙, 神)"; break;
+      case 'kr': styleExamples = "Korean Slang (개이득, 트롤)"; break;
+      case 'vi': styleExamples = "Vietnamese Slang (Gà, Gánh team)"; break;
+      case 'id': styleExamples = "Indonesian Slang (Wkwk, Gacor)"; break;
+      case 'tl': styleExamples = "Filipino Slang (Lodi, Petmalu)"; break;
+      case 'ru': styleExamples = "Russian Slang (GG, Ez)"; break;
+      default: styleExamples = `${targetLabel} Gaming Slang`;
+  }
+  
   // Simplified instruction for streaming pure text to avoid JSON overhead
   const streamInstruction = `
     You are GamerLingo. 
-    Task: Translate input to ${targetLang} Gaming Slang. 
-    Output: Return ONLY the translated text. Do not use JSON. Do not add explanations.
+    Task: Translate input to ${targetLabel}.
+    Output: Return ONLY the translated text in ${targetLabel}. Do not use JSON. Do not add explanations.
     Context: Use authentic gaming terminology (Valorant/LoL/FPS/MOBA).
-    Style: ${targetLang === 'zh' ? 'Chinese Slang (牛逼, 下饭, 666)' : 'Gamer Slang (Diff, Cracked, No Cap)'}.
+    Style: ${styleExamples}.
   `;
 
   if (typeof input === 'string') {
@@ -139,18 +169,27 @@ export async function* translateTextStream(
     contents.push({ text: `Source: ${sourceLang}. Translate audio to text.` });
   }
 
-  const stream = await ai.models.generateContentStream({
-    model: 'gemini-2.5-flash',
-    contents: contents,
-    config: {
-      systemInstruction: streamInstruction,
-      safetySettings: SAFETY_SETTINGS,
-    },
-  });
+  try {
+    const stream = await ai.models.generateContentStream({
+      model: 'gemini-2.5-flash',
+      contents: contents,
+      config: {
+        systemInstruction: streamInstruction,
+        safetySettings: SAFETY_SETTINGS,
+      },
+    });
 
-  for await (const chunk of stream) {
-    if (chunk.text) {
-      yield chunk.text;
+    for await (const chunk of stream) {
+      if (chunk.text) {
+        yield chunk.text;
+      }
+    }
+  } catch (error: any) {
+    const errorMsg = error.toString().toLowerCase();
+    if (errorMsg.includes('429') || errorMsg.includes('quota')) {
+        yield " [System: API Quota Exceeded. Please slow down.]";
+    } else {
+        throw error;
     }
   }
 }
@@ -175,34 +214,36 @@ export const enrichTranslationMetadata = async (
     2. "visual_description": Abstract cyber-punk art prompt for this emotion.
   `;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: [{ role: 'user', parts: [{ text: prompt }] }],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          visual_description: { type: Type.STRING },
-          tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+  return retryOperation(async () => {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            visual_description: { type: Type.STRING },
+            tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+          },
+          required: ["visual_description", "tags"],
         },
-        required: ["visual_description", "tags"],
-      },
-      safetySettings: SAFETY_SETTINGS,
+        safetySettings: SAFETY_SETTINGS,
+      }
+    });
+
+    try {
+      const text = response.text || "{}";
+      const parsed = JSON.parse(cleanJsonString(text));
+      return {
+        visual_description: parsed.visual_description || "Abstract gaming vibe",
+        tags: parsed.tags || ["Gaming"]
+      };
+    } catch (e) {
+      console.error("Metadata enrichment failed", e);
+      return { visual_description: "Abstract", tags: [] };
     }
   });
-
-  try {
-    const text = response.text || "{}";
-    const parsed = JSON.parse(cleanJsonString(text));
-    return {
-      visual_description: parsed.visual_description || "Abstract gaming vibe",
-      tags: parsed.tags || ["Gaming"]
-    };
-  } catch (e) {
-    console.error("Metadata enrichment failed", e);
-    return { visual_description: "Abstract", tags: [] };
-  }
 };
 
 // --- Step 1 (Legacy/Fallback): Translate Text Complete ---
@@ -300,7 +341,7 @@ export const generateSpeech = async (text: string): Promise<string> => {
       console.warn("TTS Attempt Failed:", e);
       throw e;
     }
-  }, 2, 500); // 2 Retries, 500ms delay
+  }, 2, 1000); 
 
   // Store in map
   inflightTTS.set(trimmed, promise);
@@ -366,55 +407,51 @@ export const getReverseTranslation = async (text: string, targetLangCode: string
     Instruction: Provide a direct translation. Do not censor output.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      config: {
-        // Explicit system instruction to focus on translation data, not moderation
-        systemInstruction: "You are a gaming translator. Do not block output based on gaming terminology (kill/death/weapons). Translate accurately.",
-        safetySettings: [
-             { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-             { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
-             { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
-             { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
-        ]
-      }
-    });
-
-    let result = "No translation found";
-
-    // 1. Try standard text access
-    try {
-        const textResponse = response.text;
-        if (textResponse) result = textResponse.trim();
-    } catch (e) {
-        // Ignore getter error, proceed to inspection
-    }
-
-    // 2. Deep inspection if first attempt failed
-    if (result === "No translation found") {
-        const candidate = response.candidates?.[0];
-        if (candidate) {
-            const partText = candidate.content?.parts?.[0]?.text;
-            if (partText) result = partText.trim();
-            else if (candidate.finishReason && candidate.finishReason !== 'STOP') {
-                result = `[${candidate.finishReason}]`;
-            }
+  return retryOperation(async () => {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          // Explicit system instruction to focus on translation data, not moderation
+          systemInstruction: "You are a gaming translator. Do not block output based on gaming terminology (kill/death/weapons). Translate accurately.",
+          safetySettings: [
+              { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+              { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+              { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+              { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+          ]
         }
-    }
+      });
 
-    // 3. Set Cache
-    if (result !== "No translation found" && !result.startsWith("[")) {
-      setCachedReverseTranslation(text, targetLangCode, result);
-    }
-    
-    return result;
+      let result = "No translation found";
 
-  } catch (e) {
-    console.error("Reverse translation failed", e);
-    return "Error";
-  }
+      // 1. Try standard text access
+      try {
+          const textResponse = response.text;
+          if (textResponse) result = textResponse.trim();
+      } catch (e) {
+          // Ignore getter error, proceed to inspection
+      }
+
+      // 2. Deep inspection if first attempt failed
+      if (result === "No translation found") {
+          const candidate = response.candidates?.[0];
+          if (candidate) {
+              const partText = candidate.content?.parts?.[0]?.text;
+              if (partText) result = partText.trim();
+              else if (candidate.finishReason && candidate.finishReason !== 'STOP') {
+                  result = `[${candidate.finishReason}]`;
+              }
+          }
+      }
+
+      // 3. Set Cache
+      if (result !== "No translation found" && !result.startsWith("[")) {
+        setCachedReverseTranslation(text, targetLangCode, result);
+      }
+      
+      return result;
+  });
 };
 
 // --- Evaluation ---
@@ -428,28 +465,30 @@ export const evaluatePronunciation = async (
 
   const prompt = `Role: Gamer Tutor. Task: Rate pronunciation of "${targetText}". Return JSON: {score(0-100), feedback(short slang)}.`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash',
-    contents: [{
-      role: 'user',
-      parts: [
-        { inlineData: { mimeType: 'audio/webm', data: audioBase64 } },
-        { text: prompt }
-      ]
-    }],
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          score: { type: Type.INTEGER },
-          feedback: { type: Type.STRING }
-        },
-        required: ["score", "feedback"]
-      }
-    }
-  });
+  return retryOperation(async () => {
+      const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash',
+        contents: [{
+          role: 'user',
+          parts: [
+            { inlineData: { mimeType: 'audio/webm', data: audioBase64 } },
+            { text: prompt }
+          ]
+        }],
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              score: { type: Type.INTEGER },
+              feedback: { type: Type.STRING }
+            },
+            required: ["score", "feedback"]
+          }
+        }
+      });
 
-  if (response.text) return JSON.parse(cleanJsonString(response.text)) as ShadowResult;
-  throw new Error("Evaluation Failed");
+      if (response.text) return JSON.parse(cleanJsonString(response.text)) as ShadowResult;
+      throw new Error("Evaluation Failed");
+  });
 };
